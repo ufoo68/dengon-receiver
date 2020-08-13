@@ -1,0 +1,271 @@
+<!--
+* Copyright (c) 2020, Ford Motor Company
+* All rights reserved.
+*
+* Redistribution and use in source and binary forms, with or without
+* modification, are permitted provided that the following conditions are met:
+*
+* Redistributions of source code must retain the above copyright notice, this
+* list of conditions and the following disclaimer.
+*
+* Redistributions in binary form must reproduce the above copyright notice,
+* this list of conditions and the following
+* disclaimer in the documentation and/or other materials provided with the
+* distribution.
+*
+* Neither the name of the Ford Motor Company nor the names of
+* its contributors may be used to endorse or promote products derived
+* from this software without specific prior written permission.
+*
+* THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+* AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+* IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+* ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+* LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+* CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+* SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+* INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+* CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+* ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+* POSSIBILITY OF SUCH DAMAGE.
+-->
+
+<html>
+  <head>
+    <script src="./SDL.min.js"></script>
+
+    <script type="module">
+      import sdl_manifest from "./manifest.js";
+
+      class HelloSdl {
+        lock = false;
+        prevSpeed = null;
+        constructor() {
+          const fileName = `${sdl_manifest.appId}_icon`;
+          const file = new SDL.manager.file.filetypes.SdlFile()
+            .setName(fileName)
+            .setFilePath(sdl_manifest.appIcon)
+            .setType(SDL.rpc.enums.FileType.GRAPHIC_PNG)
+            .setPersistent(true);
+
+          this._lifecycleConfig = new SDL.manager.LifecycleConfig()
+            .loadManifest(sdl_manifest)
+            .setLanguageDesired(SDL.rpc.enums.Language.EN_US)
+            .setTransportConfig(new SDL.transport.WebSocketClientConfig());
+
+          this._appConfig = new SDL.manager.AppConfig().setLifecycleConfig(
+            this._lifecycleConfig
+          );
+
+          const managerListener = new SDL.manager.SdlManagerListener();
+          managerListener
+            .setOnStart(sdlManager => {
+              this._permissionManager = this._sdlManager.getPermissionManager();
+              this._logPermissions();
+              this._permissionManager.addListener(
+                [
+                  new SDL.manager.permission.PermissionElement(
+                    SDL.rpc.enums.FunctionID.SubscribeVehicleData,
+                    [
+                      "accPedalPosition",
+                      "gps",
+                      "fuelLevel",
+                      "odometer",
+                      "prndl"
+                    ]
+                  )
+                ],
+                SDL.manager.permission.enums.PermissionGroupType.ANY,
+                (allowedPermissions, permissionGroupStatus) => {
+                  console.log("SubscribeVehicleData permissions changed!");
+                  console.log("Allowed Permissions: ", allowedPermissions);
+                  console.log(
+                    "Permission Group Status: ",
+                    permissionGroupStatus
+                  );
+                  this._logPermissions();
+                }
+              );
+              this._onConnected();
+            })
+            .setOnError((sdlManager, info) => {
+              console.error("Error from SdlManagerListener: ", info);
+            });
+
+          this._sdlManager = new SDL.manager.SdlManager(
+            this._appConfig,
+            managerListener
+          );
+          this._sdlManager
+            .start()
+            .addRpcListener(
+              SDL.rpc.enums.FunctionID.OnHMIStatus,
+              this._onHmiStatusListener.bind(this)
+            );
+          this._onSocket();
+        }
+        async _onConnected() {
+          const screenManager = this._sdlManager.getScreenManager();
+          screenManager.setTitle("DENGONBAN");
+          screenManager.setTextField1("DENGONはありません");
+          screenManager.setPrimaryGraphic(
+            new SDL.manager.file.filetypes.SdlArtwork(
+              "unlock",
+              SDL.rpc.enums.FileType.GRAPHIC_PNG
+            ).setFilePath("./assets/unlock.png")
+          );
+          let state_unlock = new SDL.manager.screen.utils.SoftButtonState(
+            "UNLOCK",
+            "音声ON"
+          );
+          let state_lock = new SDL.manager.screen.utils.SoftButtonState(
+            "LOCK",
+            "音声OFF"
+          );
+
+          let softButtonObjects = [
+            new SDL.manager.screen.utils.SoftButtonObject(
+              "unlock",
+              [state_unlock],
+              "UNLOCK",
+              (id, rpc) => {
+                if (rpc instanceof SDL.rpc.messages.OnButtonPress) {
+                  this.lock = false;
+                  screenManager.setPrimaryGraphic(
+                    new SDL.manager.file.filetypes.SdlArtwork(
+                      "unlock",
+                      SDL.rpc.enums.FileType.GRAPHIC_PNG
+                    ).setFilePath("./assets/unlock.png")
+                  );
+                }
+              }
+            ),
+            new SDL.manager.screen.utils.SoftButtonObject(
+              "lock",
+              [state_lock],
+              "LOCK",
+              (id, rpc) => {
+                if (rpc instanceof SDL.rpc.messages.OnButtonPress) {
+                  this.lock = true;
+                  screenManager.setPrimaryGraphic(
+                    new SDL.manager.file.filetypes.SdlArtwork(
+                      "lock",
+                      SDL.rpc.enums.FileType.GRAPHIC_PNG
+                    ).setFilePath("./assets/lock.png")
+                  );
+                }
+              }
+            )
+          ];
+          await screenManager.setSoftButtonObjects(softButtonObjects);
+        }
+
+        async _onSocket() {
+          const sock = new WebSocket("wss://dengon-server.glitch.me");
+          sock.addEventListener("open", e => {
+            console.log("Socket on");
+          });
+          sock.addEventListener("message", async e => {
+            const screenManager = this._sdlManager.getScreenManager();
+            screenManager.setTextField1(e.data);
+            if (!this.lock) {
+              await this._sendSpeech("伝言があります");
+              await this._sleep(1000);
+              await this._sendSpeech(e.data);
+            }
+          });
+        }
+
+        async _sendSpeech(message) {
+          const chunk = new SDL.rpc.structs.TTSChunk().setText(message);
+          chunk.setType(SDL.rpc.enums.SpeechCapabilities.SC_TEXT);
+          const speak = new SDL.rpc.messages.Speak().setTtsChunks([chunk]);
+          await this._sdlManager.sendRpc(speak);
+        }
+
+        async _onHmiStatusListener(onHmiStatus) {
+          const hmiLevel = onHmiStatus.getHmiLevel();
+          this._logPermissions();
+          if (hmiLevel === SDL.rpc.enums.HMILevel.HMI_FULL) {
+            const screenManager = this._sdlManager.getScreenManager();
+
+            // 速度の変化を取得するリスナーを定義
+            this._sdlManager.addRpcListener(
+              SDL.rpc.enums.FunctionID.OnVehicleData,
+              onVehicleDataNotification => {
+                if (onVehicleDataNotification.getSpeed() !== null) {
+                  console.log(
+                    `Speed was updated to: ${onVehicleDataNotification.getSpeed()}`
+                  );
+                  const speed = Math.floor(
+                    onVehicleDataNotification.getSpeed()
+                  );
+                  if (this.prevSpeed && Math.abs(this.prevSpeed - speed) > 10) {
+                    this.lock = true;
+                    screenManager.setPrimaryGraphic(
+                      new SDL.manager.file.filetypes.SdlArtwork(
+                        "lock",
+                        SDL.rpc.enums.FileType.GRAPHIC_PNG
+                      ).setFilePath("./assets/lock.png")
+                    );
+                  }
+                  this.prevSpeed = speed;
+                }
+              }
+            );
+
+            // // 速度の変化を取得開始
+            const subscribeRequest = new SDL.rpc.messages.SubscribeVehicleData().setSpeed(
+              true
+            );
+            const response = await this._sdlManager
+              .sendRpc(subscribeRequest)
+              .catch(error => error);
+            if (response.getSuccess()) {
+              console.log("Successfully subscribed to vehicle data.");
+            } else {
+              console.log("Request to subscribe to vehicle data was rejected.");
+            }
+          }
+        }
+
+        async _sleep(timeout = 1000) {
+          return new Promise(resolve => {
+            setTimeout(resolve, timeout);
+          });
+        }
+
+        _logPermissions() {
+          if (this._permissionManager) {
+            console.log(
+              `Show RPC allowed: ${this._permissionManager.isRpcAllowed(
+                SDL.rpc.enums.FunctionID.Show
+              )}`
+            );
+            console.log(
+              `PutFile RPC allowed: ${this._permissionManager.isRpcAllowed(
+                SDL.rpc.enums.FunctionID.PutFile
+              )}`
+            );
+            console.log(
+              `GetVehicleData RPC allowed: ${this._permissionManager.isRpcAllowed(
+                SDL.rpc.enums.FunctionID.GetVehicleData
+              )}`
+            );
+            console.log(
+              `SubscribeVehicleData RPC allowed: ${this._permissionManager.isRpcAllowed(
+                SDL.rpc.enums.FunctionID.SubscribeVehicleData
+              )}`
+            );
+          }
+        }
+      }
+
+      console.log("start app");
+      const app = new HelloSdl();
+    </script>
+  </head>
+  <body>
+    You can open the developper tool on the chrome browser to debug this app.
+  </body>
+</html>
