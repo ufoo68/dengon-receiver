@@ -33,6 +33,7 @@
 <html>
   <head>
     <script src="./SDL.min.js"></script>
+    <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.4.27.4.min.js"></script>
 
     <script type="module">
       import sdl_manifest from "./manifest.js";
@@ -102,7 +103,7 @@
               SDL.rpc.enums.FunctionID.OnHMIStatus,
               this._onHmiStatusListener.bind(this)
             );
-          this._onSocket();
+          this._onPubNub();
         }
         async _onConnected() {
           const screenManager = this._sdlManager.getScreenManager();
@@ -160,27 +161,44 @@
           await screenManager.setSoftButtonObjects(softButtonObjects);
         }
 
-        async _onSocket() {
-          const sock = new WebSocket("wss://dengon-server.glitch.me");
-          sock.addEventListener("open", e => {
-            console.log("Socket on");
-          });
-          sock.addEventListener("message", async e => {
-            const screenManager = this._sdlManager.getScreenManager();
-            screenManager.setTextField1(e.data);
-            if (!this.lock) {
-              await this._sendSpeech("伝言があります");
-              await this._sleep(1000);
-              await this._sendSpeech(e.data);
-            }
-          });
-        }
-
         async _sendSpeech(message) {
           const chunk = new SDL.rpc.structs.TTSChunk().setText(message);
           chunk.setType(SDL.rpc.enums.SpeechCapabilities.SC_TEXT);
           const speak = new SDL.rpc.messages.Speak().setTtsChunks([chunk]);
           await this._sdlManager.sendRpc(speak);
+        }
+
+        async _sleep(timeout = 1000) {
+          return new Promise(resolve => {
+            setTimeout(resolve, timeout);
+          });
+        }
+
+        async _onPubNub() {
+          const pubnub = new PubNub({
+            publishKey: "pub-c-8d987bab-a38d-4bd9-824e-ecaae28a167b",
+            subscribeKey: "sub-c-aaa4ba70-dc94-11ea-b260-b6ccfb19765d"
+          });
+          pubnub.addListener({
+            status: statusEvent => {
+              if (statusEvent.category === "PNConnectedCategory") {
+                console.log("connected");
+              }
+            },
+            message: async msg => {
+              const screenManager = this._sdlManager.getScreenManager();
+              screenManager.setTextField1(msg.message);
+              if (!this.lock) {
+                await this._sendSpeech("伝言があります");
+                await this._sleep(1000);
+                await this._sendSpeech(msg.message);
+              }
+            }
+          });
+          pubnub.subscribe({
+            channels: ["dengonban"],
+            withPresence: true
+          });
         }
 
         async _onHmiStatusListener(onHmiStatus) {
@@ -189,7 +207,6 @@
           if (hmiLevel === SDL.rpc.enums.HMILevel.HMI_FULL) {
             const screenManager = this._sdlManager.getScreenManager();
 
-            // 速度の変化を取得するリスナーを定義
             this._sdlManager.addRpcListener(
               SDL.rpc.enums.FunctionID.OnVehicleData,
               onVehicleDataNotification => {
@@ -214,7 +231,6 @@
               }
             );
 
-            // // 速度の変化を取得開始
             const subscribeRequest = new SDL.rpc.messages.SubscribeVehicleData().setSpeed(
               true
             );
@@ -227,12 +243,6 @@
               console.log("Request to subscribe to vehicle data was rejected.");
             }
           }
-        }
-
-        async _sleep(timeout = 1000) {
-          return new Promise(resolve => {
-            setTimeout(resolve, timeout);
-          });
         }
 
         _logPermissions() {
