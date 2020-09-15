@@ -17,4 +17,4 @@ PORT=3000
 
 Change 'XXXXXX' to your ws url and open the address by the web browser in a tab different from manticore.
 
-[https://dengo-receiver.glitch.me/?sdl-host=XXXXXX.m.sdl.tools&sdl-transport-role=wss-server&sdl-port=444](https://dengo-receiver.glitch.me/?sdl-host=XXXXXX.m.sdl.tools&sdl-transport-role=wss-server&sdl-port=444)
+[https://dengon-receiver.glitch.me/?sdl-host=XXXXXX.m.sdl.tools&sdl-transport-role=wss-server&sdl-port=444](https://dengon-receiver.glitch.me/?sdl-host=XXXXXX.m.sdl.tools&sdl-transport-role=wss-server&sdl-port=444)
